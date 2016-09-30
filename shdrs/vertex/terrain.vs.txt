@@ -1,0 +1,86 @@
+#version 400 core
+
+
+const int NUM_LIGHT_SOURCES = 4;
+
+
+in vec3 position;
+in vec2 textureCoords;
+in vec3 normal;
+
+
+out vec2 pass_textureCoords;
+out vec3 surfaceNormal;
+out vec3 toLightVector[NUM_LIGHT_SOURCES];     // 4 light sources. more lights, slower frame rate    NUM_LIGHT_SOURCES
+out vec3 toCameraVector;
+out float visibility;          // = e^-((distance * density)^gradient) = level of fog
+
+
+uniform mat4 transformationMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform vec3 lightPosition[NUM_LIGHT_SOURCES]; // NUM_LIGHT_SOURCES
+
+
+////
+// clipping planes
+// Recall that the eqn of plane is: Ax + By + Cz + D = 0,
+//  where (A, B, C) is normal to the plane,
+//  and D = signed distance from the origin	
+// So, for a horizontal plane,
+//  normal is (0,1,0) and D = -height,
+//  or normal is (0,-1,0) and D = height.
+uniform vec4 plane;
+
+
+////
+// fog/visibility vars
+const float density  =  0.002;  // fog density
+const float gradient =  5.0;    // fog gradient
+
+
+void main(void){
+
+	////
+	// position in world 
+	vec4 worldPosition = transformationMatrix * vec4(position,1.0);
+	
+	
+	////
+	// clipping planes
+	gl_ClipDistance[0] = dot(worldPosition, plane);
+
+
+	////
+	// textures (implemented with blend maps)
+	pass_textureCoords = textureCoords;
+	
+
+	////
+	// camera
+	vec4 positionRelativeToCam = viewMatrix * worldPosition;	
+	gl_Position = projectionMatrix * positionRelativeToCam;
+
+	toCameraVector = (inverse(viewMatrix) * vec4(0.0,0.0,0.0,1.0)).xyz - worldPosition.xyz;
+	
+	
+	////
+	// fog/visibility
+	float distance = length(positionRelativeToCam.xyz);
+	visibility = exp(-pow((distance * density), gradient));    // fogginess function
+	visibility = clamp(visibility, 0.0, 1.0);                  // clamps value between 0 and 1 
+	
+
+	////
+	// surface normals (haven't implemented fake lighting for visibles.terrains)
+	surfaceNormal = (transformationMatrix * vec4(normal,0.0)).xyz;
+
+
+	////	
+	// lighting 
+	for(int i = 0; i < NUM_LIGHT_SOURCES; i++) {                   // NUM_LIGHT_SOURCES
+		toLightVector[i] = lightPosition[i] - worldPosition.xyz;
+	}
+		
+	
+}

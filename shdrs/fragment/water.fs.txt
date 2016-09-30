@@ -1,0 +1,147 @@
+#version 400 core
+
+const float WAVE_STRENGTH = 0.04;  // magnitude of visibles.waters' distortion effect - ie, its apparent waves
+
+const float SHINE_DAMPER  = 20.0;
+const float REFLECTIVITY  = 0.5;
+const float DEPTH_TRANSPARENCY_LIMIT_FACTOR = 5.0;
+const float EDGE_TRANSPARENCY_LIMIT_FACTOR  = 20.0;
+const float SPECULAR_HIGHLIGHTS_TRANSPARENCY_LIMIT_FACTOR  = 5.0;
+
+const float NEAR_PLANE	= 0.1f;     //must be same as MasterRenderer.NEAR_PLANE
+const float FAR_PLANE	= 1000.0f;  //must be same as MasterRenderer.FAR_PLANE
+
+const vec4 SURFACE_TINT_COLOR = vec4(0.0, 0.3, 0.5, 1.0);   // a bluish-green
+
+
+
+in vec4 clipSpace;
+in vec2 textureCoords;
+in vec3 toCameraVector;  // from vertex shader so interpolated over entire visibles.waters polygon by now
+in vec3 fromLightVector;  
+
+out vec4 out_Color;
+
+
+//uniform float waveStrength;  // magnitude of visibles.waters' distortion effect - ie, its apparent waves
+uniform sampler2D reflectionTexture;
+uniform sampler2D refractionTexture;
+uniform sampler2D dudvMap;   // simulate ripples
+uniform sampler2D normalMap; // simulate different normals across surface tex (actual tex is flat) 
+uniform sampler2D depthMap; 
+
+uniform vec3 lightColour;
+
+uniform float moveFactor;
+
+
+
+
+void main(void) {
+
+	
+	////
+	// Convert clip space to normalized device space
+	//  using perspective division.
+	//
+	//   Normalized device space coord system:
+	//       ^ y      y = -1..1
+	//       |        x = -1..1
+	//   ----|---> x
+	//       |
+	//
+	// Then convert normalized device coords to the screen space
+	//  coord system so that we can sample the textures.
+	//
+	//   ^ y      y = 0..1
+	//   |        x = 0..1
+	//   |---> x
+	//
+	vec2 nDCoords = (clipSpace.xy / clipSpace.w);
+	nDCoords = (nDCoords / 2.0) + 0.5;
+	vec2 refractTexCoords = vec2(nDCoords.x,  nDCoords.y);
+	vec2 reflectTexCoords = vec2(nDCoords.x, -nDCoords.y);    // reflection, so invert y coord
+	
+	
+	float depth = texture(depthMap, refractTexCoords).r;  // depth info here
+	float n = NEAR_PLANE;
+	float f = FAR_PLANE;
+	float floorDistance = 2.0 * n * f / (f + n - (2.0 * depth - 1.0) * (f - n));
+	
+	depth = gl_FragCoord.z;
+	float waterDistance = 2.0 * n * f / (f + n - (2.0 * depth - 1.0) * (f - n));
+	float waterDepth = floorDistance - waterDistance;
+	
+	
+	////
+	// distortion effects
+	//   move visibles.waters along the x direction
+	//   move visibles.waters along both the -x and y directions 
+	//   only care about the red and green values of dudvMap
+	//   transform rg vals from [0, 1] to [-1, 1]
+	vec2 distortedTexCoords = texture(
+			dudvMap, 
+			vec2(textureCoords.x + moveFactor, 
+				 textureCoords.y)).rg * 0.1;
+	distortedTexCoords = textureCoords + vec2(distortedTexCoords.x, 
+											  distortedTexCoords.y + moveFactor);
+	vec2 totalDistortion = (
+		texture(dudvMap, distortedTexCoords).rg * 2.0 - 1.0) 
+			* WAVE_STRENGTH * clamp(waterDepth/EDGE_TRANSPARENCY_LIMIT_FACTOR, 0.0, 1.0);
+			
+	refractTexCoords += totalDistortion;
+	reflectTexCoords += totalDistortion;
+	
+	// don't let OpenGL wrap tiles if slightly negative values 
+	refractTexCoords = clamp(refractTexCoords, 0.001, 0.999);
+	reflectTexCoords.x = clamp(reflectTexCoords.x,  0.001,  0.999); // similarly for reflectTexCoords, 
+	reflectTexCoords.y = clamp(reflectTexCoords.y, -0.999, -0.001); //  except with y coord flipped   
+	
+	
+	////
+	// surface normals
+	vec4 normalMapColour = texture(normalMap, distortedTexCoords);
+
+	// match map's vals and transform red and green vals
+	vec3 normal = vec3(normalMapColour.r * 2.0 - 1.0,  
+					   normalMapColour.b * 3.0,   // increase y component's effect, to make visibles.waters calmer 
+					   normalMapColour.g * 2.0 - 1.0);
+	normal = normalize(normal);
+
+
+	////
+	// Fresnel effect
+	vec3 viewVector = normalize(toCameraVector);
+	//vec3 waterSurfaceNomal = vec3(0.0, 1.0, 0.0);
+	float refractiveFactor = dot(viewVector, normal);
+	//refractiveFactor = pow(refractiveFactor, 0.5);
+	refractiveFactor = clamp(refractiveFactor, 0.0, 1.0);
+	
+
+	vec3 reflectedLight = reflect(normalize(fromLightVector), normal);
+	float specular = max(dot(reflectedLight, viewVector), 0.0);
+	specular = pow(specular, SHINE_DAMPER);
+	vec3 specularHighlights = lightColour * specular * REFLECTIVITY
+			* clamp(waterDepth/SPECULAR_HIGHLIGHTS_TRANSPARENCY_LIMIT_FACTOR, 0.0, 1.0);
+
+
+	////
+	// colors
+	vec4 refractColour = texture(refractionTexture, refractTexCoords);
+	vec4 reflectColour = texture(reflectionTexture, reflectTexCoords);
+	
+	out_Color = mix(reflectColour, refractColour, refractiveFactor); // mix with the refractiveFactor
+	out_Color = mix(out_Color, SURFACE_TINT_COLOR, 0.2);              
+	out_Color = out_Color + vec4(specularHighlights, 0.0);
+	out_Color.a = clamp(waterDepth/DEPTH_TRANSPARENCY_LIMIT_FACTOR, 0.0, 1.0);
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+}
